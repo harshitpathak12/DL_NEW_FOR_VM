@@ -1,0 +1,40 @@
+# Training configuration for driving license detection model
+# ==========================================================
+
+# Model architecture: yolov8n (fastest), yolov8s (balanced), yolov8m (higher accuracy)
+model: yolov8s
+
+# Training hyperparameters
+epochs: 50
+batch_size: 16
+image_size: 640
+learning_rate: 0.01
+optimizer: auto  # SGD, Adam, AdamW, or auto
+
+# Device: cuda, cpu, or 0, 1 for specific GPU
+device: cuda
+
+# Augmentation settings (Albumentations)
+augmentation:
+  rotation: true
+  motion_blur: true
+  brightness: true
+  contrast: true
+  random_crop: true
+  perspective: true
+  noise: true
+
+# Checkpoint and logging
+save_period: 10  # Save checkpoint every N epochs
+project: runs
+name: license_detection
+exist_ok: false  # Overwrite existing run
+
+# Early stopping (patience in epochs)
+patience: 20
+
+# Class definition
+classes:
+  names:
+    0: driving_license
+  num_classes: 1

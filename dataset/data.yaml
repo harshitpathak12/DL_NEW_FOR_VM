@@ -1,0 +1,7 @@
+path: /home/mluser/data/smart_mobility_harshit/Smart_mobility_ai/driver_license_detection/dataset
+train: images/train
+val: images/val
+test: images/test
+names:
+  0: driving_license
+nc: 1

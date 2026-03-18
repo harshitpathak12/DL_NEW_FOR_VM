@@ -1,0 +1,13 @@
+# Pipeline config: Qwen OCR + Indian DL rules
+# (Currently not wired to CLI flags, but documents the intended runtime behavior.)
+
+qwen:
+  enabled: true
+  model_id: "Qwen/Qwen2.5-VL-3B-Instruct"
+
+validation:
+  engine: "indian_dl_rules"  # utils.license_rules.validate_indian_dl
+
+pipeline:
+  conf_threshold: 0.5   # Only validate detections above this confidence
+  crop_padding: 4       # Pixels around bbox when cropping
