@@ -1,10 +1,11 @@
 """
-Single pipeline: YOLOv8s detection -> crop -> Qwen OCR + validation.
+Single pipeline: YOLOv8s detection (GPU FP16) -> crop -> Qwen OCR + validation.
 """
 
 from pathlib import Path
 from typing import Any
 
+import cv2
 import numpy as np
 from ultralytics import YOLO
 
@@ -13,8 +14,7 @@ from utils.visualization import draw_bbox, draw_validation_status
 from utils.qwen_ocr import QwenOCRResult, qwen_ocr_and_validate
 from utils.license_rules import validate_indian_dl
 
-# Global state to throttle Qwen calls across frames
-QWEN_INTERVAL = 10  # run Qwen OCR every N frames
+QWEN_INTERVAL = 10
 _frame_index = 0
 _last_rule_result: dict | None = None
 _last_ocr_text: str = ""
@@ -27,49 +27,54 @@ def run_pipeline(
     conf_threshold: float = 0.02,
     yolo_conf: float = 0.02,
     run_ocr_enabled: bool = True,
-    run_vit_enabled: bool = False,  # kept for backward CLI compatibility; ignored
+    run_vit_enabled: bool = False,
     crop_padding: int = 10,
+    device: str = "cuda",
+    half: bool = True,
 ) -> tuple[list[dict], np.ndarray]:
     """
     Run detection, then for each bbox above conf_threshold:
         crop -> Qwen OCR + licence validation.
 
-    Uses a low YOLO detection threshold (yolo_conf) so potential license cards are
-    always passed to Qwen for a second-stage semantic check.
-
     Args:
         frame: BGR image.
-        model: Loaded YOLO model.
+        model: Loaded YOLO model (already on target device).
         imgsz: YOLO input size.
         conf_threshold: Only run Qwen for detections with confidence >= this.
-        yolo_conf: YOLO internal confidence threshold (low to avoid missing licenses).
+        yolo_conf: YOLO internal confidence threshold.
         run_ocr_enabled: Whether to run Qwen OCR/validation on crops.
         run_vit_enabled: Ignored (ViT removed in favour of Qwen).
         crop_padding: Padding around bbox for crop.
-
-    Returns:
-        (detections, annotated_frame)
+        device: 'cuda' or 'cpu'.
+        half: Use FP16 inference (only on CUDA).
     """
     global _frame_index, _last_rule_result, _last_ocr_text
 
     if frame is None:
         return [], np.array([])
 
-    results = model.predict(frame, imgsz=imgsz, conf=yolo_conf, verbose=False)
+    results = model.predict(
+        frame,
+        imgsz=imgsz,
+        conf=yolo_conf,
+        verbose=False,
+        device=device,
+        half=half and device == "cuda",
+    )
     out_img = frame.copy()
     detections: list[dict] = []
 
     if not results or len(results) == 0 or results[0].boxes is None:
         return detections, out_img
 
-    import cv2
-
     boxes = results[0].boxes
-    # Sort by confidence descending; only send the best detection to Qwen to keep latency manageable
-    indices = sorted(range(len(boxes)), key=lambda i: float(boxes.conf[i]), reverse=True)
+    indices = sorted(
+        range(len(boxes)),
+        key=lambda i: float(boxes.conf[i]),
+        reverse=True,
+    )
     max_qwen_detections = 1
 
-    # Decide whether to run Qwen this frame
     _frame_index += 1
     run_qwen_this_frame = (_frame_index % QWEN_INTERVAL) == 0
 
@@ -80,7 +85,7 @@ def run_pipeline(
         conf = float(box.conf[0])
         bbox = xyxy.tolist()
 
-        det = {
+        det: dict[str, Any] = {
             "bbox": bbox,
             "confidence": conf,
             "class": "driving_license",
@@ -96,7 +101,6 @@ def run_pipeline(
             if crop is not None and run_ocr_enabled and qwen_count < max_qwen_detections:
                 qwen_count += 1
                 ch, cw = crop.shape[:2]
-                # Upscale very small crops to help Qwen read text
                 if max(ch, cw) < 400:
                     scale = 400 / max(ch, cw)
                     crop_for_ocr = cv2.resize(
@@ -108,17 +112,13 @@ def run_pipeline(
                     crop_for_ocr = crop
 
                 if run_qwen_this_frame or _last_rule_result is None:
-                    # 1) Qwen: extract text from card
                     qwen_out: QwenOCRResult = qwen_ocr_and_validate(crop_for_ocr)
                     det["ocr_text"] = qwen_out.text
                     if qwen_out.text:
                         det["ocr_lines"] = [{"text": qwen_out.text, "confidence": qwen_out.confidence}]
                     _last_ocr_text = qwen_out.text or ""
-
-                    # 2) Rule-based Indian DL validation using the extracted text
                     _last_rule_result = validate_indian_dl(_last_ocr_text)
                 else:
-                    # Reuse last OCR + validation result to save latency
                     det["ocr_text"] = _last_ocr_text
                     if _last_ocr_text:
                         det["ocr_lines"] = [{"text": _last_ocr_text, "confidence": 1.0}]
@@ -149,7 +149,6 @@ def run_pipeline(
         )
         out_img = draw_bbox(out_img, bbox, label=label_text, confidence=conf, color=color)
 
-    # Prominent status banner for the best-validated detection
     for d in detections:
         vl = d.get("validation_label")
         reason = d.get("validation_reason", "")

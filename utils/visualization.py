@@ -1,13 +1,15 @@
 """
 Visualization utilities for driving license detection.
 
-- Draw bounding boxes on images
+- Draw bounding boxes on images (in-place for speed)
 - Plot precision-recall curves
 - Render confusion matrices
 """
 
 from pathlib import Path
 from typing import Sequence
+
+import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -21,25 +23,19 @@ def draw_bbox(
     color: tuple[int, int, int] = (0, 255, 0),
     thickness: int = 2,
 ) -> np.ndarray:
-    """
-    Draw bounding box on image.
-    bbox: [x1, y1, x2, y2] in pixel coordinates.
-    """
-    import cv2
-
-    img = image.copy()
+    """Draw bounding box on image in-place. Returns same array."""
     x1, y1, x2, y2 = map(int, bbox)
-    cv2.rectangle(img, (x1, y1), (x2, y2), color, thickness)
+    cv2.rectangle(image, (x1, y1), (x2, y2), color, thickness)
     text = label
     if confidence is not None:
         text += f" {confidence:.2f}"
     (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
-    cv2.rectangle(img, (x1, y1 - th - 8), (x1 + tw, y1), color, -1)
+    cv2.rectangle(image, (x1, y1 - th - 8), (x1 + tw, y1), color, -1)
     cv2.putText(
-        img, text, (x1, y1 - 4),
+        image, text, (x1, y1 - 4),
         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2,
     )
-    return img
+    return image
 
 
 def draw_validation_status(
@@ -47,21 +43,23 @@ def draw_validation_status(
     label: str,
     reason: str = "",
 ) -> np.ndarray:
-    """Draw a prominent status banner at top of frame (e.g. VALID / INVALID)."""
-    import cv2
-    img = image.copy()
-    h, w = img.shape[:2]
+    """Draw a prominent status banner at top of frame. Modifies in-place."""
+    h, w = image.shape[:2]
     text = label.upper()
     if reason:
         text += f" - {reason[:40]}"
     font = cv2.FONT_HERSHEY_SIMPLEX
     (tw, th), _ = cv2.getTextSize(text, font, 0.8, 2)
     pad = 10
-    y1, y2 = 0, th + 2 * pad
-    cv2.rectangle(img, (0, 0), (w, y2), (0, 0, 0), -1)
-    color = (0, 255, 0) if label.lower() == "valid" else (0, 0, 255) if label.lower() == "invalid" else (200, 200, 200)
-    cv2.putText(img, text, (pad, th + pad), font, 0.8, color, 2)
-    return img
+    y2 = th + 2 * pad
+    cv2.rectangle(image, (0, 0), (w, y2), (0, 0, 0), -1)
+    color = (
+        (0, 255, 0) if label.lower() == "valid"
+        else (0, 0, 255) if label.lower() == "invalid"
+        else (200, 200, 200)
+    )
+    cv2.putText(image, text, (pad, th + pad), font, 0.8, color, 2)
+    return image
 
 
 def plot_precision_recall_curve(
